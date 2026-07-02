@@ -88,4 +88,10 @@ android-app/
 
 ---
 
+## 📄 License
+
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute.
+
+---
+
 Built by **Prasad Gajare** · Wheel Strategy Dashboard
