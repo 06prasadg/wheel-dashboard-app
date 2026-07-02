@@ -139,6 +139,39 @@ tbody tr.hist-row td{opacity:.9}
   .filter-wrap{margin-left:0}
   .year-banner{padding:12px 16px}
 }
+
+/* ===== MOBILE APP POLISH (Android WebView) ===== */
+html{-webkit-text-size-adjust:100%}
+@media(max-width:768px){
+  body{overflow-x:hidden}
+  /* Header stacks and centers instead of overflowing wide */
+  .header{padding:12px 14px;flex-direction:column;align-items:stretch;gap:8px}
+  .header h1{font-size:1.15rem;justify-content:center}
+  .header-right{justify-content:center}
+  /* Year banner scrolls sideways instead of shrinking the whole page */
+  .year-banner{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:12px 14px}
+  .yb-item{flex-shrink:0}
+  .yb-val{font-size:1.25rem}
+  /* Summary cards + charts padding */
+  .summary-grid{padding:12px 14px}
+  .c-val{font-size:1.3rem}
+  /* Tabs scroll sideways, larger touch targets */
+  .tabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 14px}
+  .tab-btn{flex-shrink:0;padding:12px 16px;font-size:.9rem}
+  .tab-pane{padding:14px}
+  /* Bigger, thumb-friendly buttons and inputs */
+  .btn{padding:10px 16px;font-size:.85rem}
+  .filter-wrap{margin-left:0;width:100%}
+  select,input[type=text],input[type=number],input[type=date]{padding:9px 12px;font-size:.85rem}
+  /* Tables: keep sideways scroll inside their wrapper, readable text */
+  table{font-size:.8rem}
+  thead th,tbody td{padding:10px 8px}
+  /* Modal fills the screen like a native sheet */
+  .modal-box{width:100%;max-width:100vw;height:100dvh;max-height:100dvh;border-radius:0;padding:18px}
+}
+@media(max-width:430px){
+  .summary-grid{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
