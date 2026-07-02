@@ -353,9 +353,11 @@ tbody tr.hist-row td{opacity:.9}
       <option value="">All Tickers</option>
     </select>
     <select id="ta-type" style="background:#0d1b35;border:1px solid #1e2d4a;color:#c0ccee;padding:6px 10px;border-radius:6px;font-size:.82rem">
-      <option value="">CSP + CC</option>
+      <option value="">All (CSP + CC + Shares)</option>
+      <option value="opts">Options Only (CSP + CC)</option>
       <option value="CSP">CSP Only</option>
       <option value="CC">CC Only</option>
+      <option value="shares">Shares Called Away Only</option>
     </select>
     <div style="display:flex;gap:5px;align-items:center">
       <button class="btn btn-out" onclick="taSetRange('')"   style="font-size:.75rem;padding:5px 10px">All Time</button>
@@ -2051,19 +2053,20 @@ function applyManualSync(){
 //  BOOT: merge data, then re-renders every panel
 // ═══════════════════════════════════════════════════════════
 
+
 // ═══════════════════════════════════════════════════════════
 //  TICKER ANALYZER  (CSP & CC profit by ticker / holder / date range)
-//  Added: 02 Jul 2026
+//  Added: 02 Jul 2026 | Shares Called Away: 02 Jul 2026
 // ═══════════════════════════════════════════════════════════
 function taBuildTickers(){
   const hEl = document.getElementById('ta-holder');
   const sel  = document.getElementById('ta-ticker');
   if(!hEl || !sel) return; // pane not in DOM yet
   const holder = hEl.value;
-  const tickers = [...new Set(
-    opts.filter(t => (!holder || t.holder===holder) && ['CSP','CC'].includes(t.type))
-        .map(t=>t.ticker).filter(Boolean)
-  )].sort();
+  // Union of tickers from both opts (CSP/CC) and stk (shares)
+  const optTickers = opts.filter(t => (!holder || t.holder===holder) && ['CSP','CC'].includes(t.type)).map(t=>t.ticker);
+  const stkTickers = stk.filter(t  => (!holder || t.holder===holder) && t.status==='Complete' && t.profit!=='').map(t=>t.ticker);
+  const tickers = [...new Set([...optTickers,...stkTickers].filter(Boolean))].sort();
   const cur = sel.value;
   sel.innerHTML = '<option value="">All Tickers</option>' +
     tickers.map(t=>`<option${t===cur?' selected':''}>${t}</option>`).join('');
@@ -2092,87 +2095,135 @@ function renderTickerAnalyzer(){
   const from   = document.getElementById('ta-from').value;
   const to     = document.getElementById('ta-to').value;
 
-  // Collect all entries that have a profit value recorded
-  const data = opts.filter(t => {
+  const dateOk = (d) => {
+    if(!d) return !(from || to); // no date: include only when no range set
+    if(from && d < from) return false;
+    if(to   && d > to)   return false;
+    return true;
+  };
+
+  // ── Options (CSP / CC) ──────────────────────────────────
+  const showOpts = !type || type==='CSP' || type==='CC' || type==='opts';
+  const optData = showOpts ? opts.filter(t => {
     if(t.profit==='' || t.profit===undefined || t.profit===null) return false;
-    const p = parseFloat(t.profit);
-    if(isNaN(p)) return false;
+    if(isNaN(parseFloat(t.profit))) return false;
     if(!['CSP','CC'].includes(t.type)) return false;
+    if(type==='CSP' && t.type!=='CSP') return false;
+    if(type==='CC'  && t.type!=='CC')  return false;
     if(holder && t.holder!==holder) return false;
     if(ticker && t.ticker!==ticker) return false;
-    if(type   && t.type!==type)     return false;
-    // Date filter: use closing date or expiry; if no date, only include when no range set
-    if(from || to){
-      const d = t.date || t.expiry || '';
-      if(!d) return false;
-      if(from && d < from) return false;
-      if(to   && d > to)   return false;
-    }
-    return true;
-  });
+    return dateOk(t.date || t.expiry || '');
+  }) : [];
 
-  const cspData  = data.filter(t=>t.type==='CSP');
-  const ccData   = data.filter(t=>t.type==='CC');
-  const cspTotal = cspData.reduce((s,t)=>s+parseFloat(t.profit||0),0);
-  const ccTotal  = ccData.reduce((s,t)=>s+parseFloat(t.profit||0),0);
-  const grand    = cspTotal + ccTotal;
+  // ── Shares Called Away ──────────────────────────────────
+  // Sell-side actions: "Shares Called Away", "Shares Sold", "Shares Assigned"
+  const STK_SELL_ACTIONS = ['Shares Called Away','Shares Sold','Shares Assigned'];
+  // Profit priority: explicit profit field → sold-inv → inv alone (sell-side entry)
+  const stkProfit = t => {
+    const p = parseFloat(t.profit);
+    if(!isNaN(p) && t.profit!=='') return p;
+    const s = parseFloat(t.sold), i = parseFloat(t.inv);
+    if(!isNaN(s) && !isNaN(i) && s>0) return s - i;
+    return null;
+  };
+  const showStk = !type || type==='shares';
+  const stkData = showStk ? stk.filter(t => {
+    const isSellAction = STK_SELL_ACTIONS.includes(t.action);
+    const hasSold      = parseFloat(t.sold) > 0;
+    const isComplete   = t.status==='Complete';
+    // Include: explicit sell-side action, OR sold price recorded, OR status=Complete with profit
+    if(!isSellAction && !hasSold && !isComplete) return false;
+    if(stkProfit(t) === null) return false;
+    if(holder && t.holder!==holder) return false;
+    if(ticker && t.ticker!==ticker) return false;
+    return dateOk(t.sdate || t.date || '');
+  }) : [];
+
+  const cspData   = optData.filter(t=>t.type==='CSP');
+  const ccData    = optData.filter(t=>t.type==='CC');
+  const cspTotal  = cspData.reduce((s,t)=>s+parseFloat(t.profit||0),0);
+  const ccTotal   = ccData.reduce((s,t)=>s+parseFloat(t.profit||0),0);
+  const stkTotal  = stkData.reduce((s,t)=>s+(stkProfit(t)||0),0);
+  const grand     = cspTotal + ccTotal + stkTotal;
 
   const col  = v => v>=0 ? 'color:#4ade80' : 'color:#f87171';
   const fmtP = v => `<span style="${col(v)}">${v>=0?'+':''}$${Math.abs(v).toFixed(2)}</span>`;
   const fmtS = (v,bold) => `<span style="${col(v)};${bold?'font-weight:700':''}">${v>=0?'+':''}$${Math.abs(v).toFixed(2)}</span>`;
 
-  // ── Summary cards ─────────────────────────────────────────
   const rangeLabel = (from||to) ? `${from||'start'} → ${to||'today'}` : 'All Time';
+
+  // ── Summary cards ──────────────────────────────────────
+  const cspCard = (type==='' || type==='CSP' || type==='opts') ? `
+    <div style="background:#0d1b35;border:1px solid #1e3a5f;border-radius:10px;padding:16px 22px;min-width:150px">
+      <div style="color:#60a5fa;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">CSP Profit (${cspData.length})</div>
+      <div style="font-size:1.4rem;font-weight:700;${col(cspTotal)}">${cspTotal>=0?'+':''}$${Math.abs(cspTotal).toFixed(2)}</div>
+    </div>` : '';
+  const ccCard = (type==='' || type==='CC' || type==='opts') ? `
+    <div style="background:#0d1b35;border:1px solid #2d1b4e;border-radius:10px;padding:16px 22px;min-width:150px">
+      <div style="color:#a78bfa;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">CC Profit (${ccData.length})</div>
+      <div style="font-size:1.4rem;font-weight:700;${col(ccTotal)}">${ccTotal>=0?'+':''}$${Math.abs(ccTotal).toFixed(2)}</div>
+    </div>` : '';
+  const stkCard = (type==='' || type==='shares') ? `
+    <div style="background:#0d1b35;border:1px solid #14532d;border-radius:10px;padding:16px 22px;min-width:150px">
+      <div style="color:#4ade80;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Shares Called Away (${stkData.length})</div>
+      <div style="font-size:1.4rem;font-weight:700;${col(stkTotal)}">${stkTotal>=0?'+':''}$${Math.abs(stkTotal).toFixed(2)}</div>
+    </div>` : '';
+  const grandCard = `
+    <div style="background:#0d1b35;border:1px solid #1e2d4a;border-radius:10px;padding:16px 22px;min-width:150px">
+      <div style="color:#8899bb;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Grand Total (${optData.length+stkData.length})</div>
+      <div style="font-size:1.4rem;font-weight:700;${col(grand)}">${grand>=0?'+':''}$${Math.abs(grand).toFixed(2)}</div>
+    </div>`;
+
   const cards = `
     <div style="margin-bottom:6px;color:#6b7db8;font-size:.78rem">📅 ${rangeLabel}</div>
     <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-      <div style="background:#0d1b35;border:1px solid #1e3a5f;border-radius:10px;padding:16px 22px;min-width:155px">
-        <div style="color:#60a5fa;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">CSP Profit (${cspData.length})</div>
-        <div style="font-size:1.45rem;font-weight:700;${col(cspTotal)}">${cspTotal>=0?'+':''}$${Math.abs(cspTotal).toFixed(2)}</div>
-      </div>
-      <div style="background:#0d1b35;border:1px solid #2d1b4e;border-radius:10px;padding:16px 22px;min-width:155px">
-        <div style="color:#a78bfa;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">CC Profit (${ccData.length})</div>
-        <div style="font-size:1.45rem;font-weight:700;${col(ccTotal)}">${ccTotal>=0?'+':''}$${Math.abs(ccTotal).toFixed(2)}</div>
-      </div>
-      <div style="background:#0d1b35;border:1px solid #1e2d4a;border-radius:10px;padding:16px 22px;min-width:155px">
-        <div style="color:#8899bb;font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">Grand Total (${data.length})</div>
-        <div style="font-size:1.45rem;font-weight:700;${col(grand)}">${grand>=0?'+':''}$${Math.abs(grand).toFixed(2)}</div>
-      </div>
+      ${cspCard}${ccCard}${stkCard}${grandCard}
     </div>`;
 
-  if(data.length===0){
+  if(optData.length===0 && stkData.length===0){
     document.getElementById('ta-out').innerHTML = cards +
       '<div style="color:#6b7db8;padding:20px 0;font-style:italic">No completed trades match your filters.</div>';
     return;
   }
 
-  // ── Year breakdown table ───────────────────────────────────
+  // ── Year breakdown ─────────────────────────────────────
   const byYear = {};
-  data.forEach(t => {
-    const yr = (t.date||t.expiry||'').slice(0,4) || 'Unknown';
-    if(!byYear[yr]) byYear[yr]={csp:0,cc:0,cspN:0,ccN:0};
-    const p = parseFloat(t.profit||0);
-    if(t.type==='CSP'){byYear[yr].csp+=p; byYear[yr].cspN++;}
-    else              {byYear[yr].cc +=p; byYear[yr].ccN++;}
-  });
+  const addYear = (t, tp, p) => {
+    const yr = (t.date||t.expiry||t.sdate||'').slice(0,4) || 'Unknown';
+    if(!byYear[yr]) byYear[yr]={csp:0,cc:0,stk:0,cspN:0,ccN:0,stkN:0};
+    if(tp==='CSP')   {byYear[yr].csp+=p; byYear[yr].cspN++;}
+    else if(tp==='CC'){byYear[yr].cc +=p; byYear[yr].ccN++;}
+    else             {byYear[yr].stk+=p; byYear[yr].stkN++;}
+  };
+  optData.forEach(t => addYear(t, t.type, parseFloat(t.profit||0)));
+  stkData.forEach(t => addYear(t, 'Shares', stkProfit(t)||0));
+
   const years = Object.keys(byYear).sort();
+  const showStkCol = type==='' || type==='shares';
+  const showOptCol = type==='' || type==='CSP' || type==='CC' || type==='opts';
+
   const yearRows = years.map(yr=>{
-    const d=byYear[yr], tot=d.csp+d.cc;
+    const d=byYear[yr], tot=d.csp+d.cc+d.stk;
     return `<tr style="border-bottom:1px solid #1a2540">
       <td style="padding:8px 12px;font-weight:600;color:#c0ccee">${yr==='Unknown'?'—':yr}</td>
-      <td style="padding:8px 12px;text-align:center;color:#8899bb">${d.cspN||'—'}</td>
+      ${showOptCol?`<td style="padding:8px 12px;text-align:center;color:#8899bb">${d.cspN||'—'}</td>
       <td style="padding:8px 12px;text-align:right">${d.cspN?fmtS(d.csp):'—'}</td>
       <td style="padding:8px 12px;text-align:center;color:#8899bb">${d.ccN||'—'}</td>
-      <td style="padding:8px 12px;text-align:right">${d.ccN?fmtS(d.cc):'—'}</td>
+      <td style="padding:8px 12px;text-align:right">${d.ccN?fmtS(d.cc):'—'}</td>`:''}
+      ${showStkCol?`<td style="padding:8px 12px;text-align:center;color:#8899bb">${d.stkN||'—'}</td>
+      <td style="padding:8px 12px;text-align:right">${d.stkN?fmtS(d.stk):'—'}</td>`:''}
       <td style="padding:8px 12px;text-align:right">${fmtS(tot,true)}</td>
     </tr>`;
   }).join('');
+
   const totalRow = `<tr style="background:#1a2540;border-top:2px solid #2a3a60">
     <td style="padding:8px 12px;font-weight:700;color:#60a5fa">Total</td>
-    <td style="padding:8px 12px;text-align:center;color:#8899bb">${cspData.length}</td>
+    ${showOptCol?`<td style="padding:8px 12px;text-align:center;color:#8899bb">${cspData.length}</td>
     <td style="padding:8px 12px;text-align:right">${fmtS(cspTotal,true)}</td>
     <td style="padding:8px 12px;text-align:center;color:#8899bb">${ccData.length}</td>
-    <td style="padding:8px 12px;text-align:right">${fmtS(ccTotal,true)}</td>
+    <td style="padding:8px 12px;text-align:right">${fmtS(ccTotal,true)}</td>`:''}
+    ${showStkCol?`<td style="padding:8px 12px;text-align:center;color:#8899bb">${stkData.length}</td>
+    <td style="padding:8px 12px;text-align:right">${fmtS(stkTotal,true)}</td>`:''}
     <td style="padding:8px 12px;text-align:right">${fmtS(grand,true)}</td>
   </tr>`;
 
@@ -2182,10 +2233,12 @@ function renderTickerAnalyzer(){
       <table style="width:100%;border-collapse:collapse;background:#0d1b35;border-radius:10px;overflow:hidden;font-size:.85rem">
         <thead><tr style="border-bottom:2px solid #1e2d4a">
           <th style="padding:8px 12px;text-align:left;color:#8899bb;font-weight:600">Year</th>
-          <th style="padding:8px 12px;text-align:center;color:#60a5fa;font-weight:600"># CSP</th>
+          ${showOptCol?`<th style="padding:8px 12px;text-align:center;color:#60a5fa;font-weight:600"># CSP</th>
           <th style="padding:8px 12px;text-align:right;color:#60a5fa;font-weight:600">CSP Profit</th>
           <th style="padding:8px 12px;text-align:center;color:#a78bfa;font-weight:600"># CC</th>
-          <th style="padding:8px 12px;text-align:right;color:#a78bfa;font-weight:600">CC Profit</th>
+          <th style="padding:8px 12px;text-align:right;color:#a78bfa;font-weight:600">CC Profit</th>`:''}
+          ${showStkCol?`<th style="padding:8px 12px;text-align:center;color:#4ade80;font-weight:600"># Shares</th>
+          <th style="padding:8px 12px;text-align:right;color:#4ade80;font-weight:600">Shares Profit</th>`:''}
           <th style="padding:8px 12px;text-align:right;color:#8899bb;font-weight:600">Total</th>
         </tr></thead>
         <tbody>${yearRows}</tbody>
@@ -2193,42 +2246,58 @@ function renderTickerAnalyzer(){
       </table>
     </div>`;
 
-  // ── Trade detail table ─────────────────────────────────────
-  const sorted = [...data].sort((a,b)=>(b.date||b.expiry||'').localeCompare(a.date||a.expiry||''));
-  const tradeRows = sorted.map(t=>{
-    const p  = parseFloat(t.profit||0);
-    const dt = t.date || t.expiry || '—';
-    const bg = t.type==='CSP' ? 'background:#1e3a5f;color:#60a5fa' : 'background:#2d1b4e;color:#a78bfa';
+  // ── Trade detail ────────────────────────────────────────
+  const allTrades = [
+    ...optData.map(t=>({...t, _src:'opt', _date: t.date||t.expiry||''})),
+    ...stkData.map(t=>({...t, _src:'stk', _date: t.sdate||t.date||''}))
+  ].sort((a,b)=>b._date.localeCompare(a._date));
+
+  const tradeRows = allTrades.map(t=>{
+    const p = t._src==='stk' ? (stkProfit(t)||0) : parseFloat(t.profit||0);
+    const isStk = t._src==='stk';
+    const typeBadge = isStk
+      ? `<span style="padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700;background:#14532d;color:#4ade80">Shares</span>`
+      : t.type==='CSP'
+        ? `<span style="padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700;background:#1e3a5f;color:#60a5fa">CSP</span>`
+        : `<span style="padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700;background:#2d1b4e;color:#a78bfa">CC</span>`;
+    const detail = isStk
+      ? `${t.qty||''}sh @ $${parseFloat(t.avg||0).toFixed(2)} → $${parseFloat(t.sold||0).toFixed(2)}`
+      : `$${t.strike||'—'} | ${t.expiry||'—'}`;
     return `<tr style="border-bottom:1px solid #1a2540">
-      <td style="padding:7px 10px;color:#8899bb;font-size:.82rem">${dt}</td>
+      <td style="padding:7px 10px;color:#8899bb;font-size:.82rem">${t._date||'—'}</td>
       <td style="padding:7px 10px;font-weight:700;color:#e2e8f0">${t.ticker||'—'}</td>
       <td style="padding:7px 10px;color:#8899bb;font-size:.82rem">${t.holder||'—'}</td>
-      <td style="padding:7px 10px"><span style="padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700;${bg}">${t.type}</span></td>
-      <td style="padding:7px 10px;color:#8899bb;font-size:.82rem">${t.strike||'—'}</td>
-      <td style="padding:7px 10px;color:#8899bb;font-size:.82rem">${t.expiry||'—'}</td>
+      <td style="padding:7px 10px">${typeBadge}</td>
+      <td style="padding:7px 10px;color:#8899bb;font-size:.8rem">${detail}</td>
       <td style="padding:7px 10px;text-align:right;font-weight:600">${fmtP(p)}</td>
     </tr>`;
   }).join('');
 
   const tradesTable = `
     <div>
-      <div style="color:#8899bb;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">Trade Detail (${data.length} completed trades, newest first)</div>
+      <div style="color:#8899bb;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">Trade Detail (${allTrades.length} trades, newest first)</div>
       <table style="width:100%;border-collapse:collapse;background:#0d1b35;border-radius:10px;overflow:hidden;font-size:.85rem">
         <thead><tr style="border-bottom:2px solid #1e2d4a">
-          <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Close Date</th>
+          <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Date</th>
           <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Ticker</th>
           <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Holder</th>
           <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Type</th>
-          <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Strike</th>
-          <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Expiry</th>
+          <th style="padding:7px 10px;text-align:left;color:#8899bb;font-weight:600">Detail</th>
           <th style="padding:7px 10px;text-align:right;color:#8899bb;font-weight:600">Profit</th>
         </tr></thead>
         <tbody>${tradeRows}</tbody>
       </table>
     </div>`;
 
-  document.getElementById('ta-out').innerHTML = cards + yearTable + tradesTable;
+  // DEBUG: show raw stk entries for selected ticker
+  const debugStk = stk.filter(t => (!holder || t.holder===holder) && (!ticker || t.ticker===ticker));
+  const debugHtml = debugStk.length ? `<div style="margin-top:16px;padding:12px;background:#1a0a0a;border:1px solid #7f1d1d;border-radius:8px;font-size:.72rem;color:#fca5a5">
+    <div style="font-weight:700;margin-bottom:6px;color:#f87171">🔍 DEBUG — Raw stk entries for ${ticker||'all'} (${debugStk.length} found):</div>
+    ${debugStk.map(t=>`<div style="font-family:monospace;margin-bottom:3px;word-break:break-all">action=<b>${t.action}</b> status=<b>${t.status}</b> sold=<b>${t.sold}</b> inv=<b>${t.inv}</b> profit=<b>${t.profit}</b> sdate=<b>${t.sdate}</b> date=<b>${t.date}</b></div>`).join('')}
+  </div>` : '<div style="margin-top:12px;padding:10px;background:#1a0a0a;border:1px solid #7f1d1d;border-radius:8px;color:#f87171;font-size:.75rem">🔍 DEBUG: NO stk entries found for this holder/ticker combination</div>';
+  document.getElementById('ta-out').innerHTML = cards + yearTable + tradesTable + debugHtml;
 }
+
 
 function refreshAll(){
   computeOverridePnl();
