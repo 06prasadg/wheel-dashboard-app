@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,8 +38,23 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
 
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk wheel-strategy-dashboard.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: wheel-dashboard-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: wheel-strategy-dashboard.apk
+
+      - name: Publish Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Wheel Strategy Dashboard (build ${{ github.run_number }})
+          body: |
+            Latest Android build of the Wheel Strategy Dashboard.
+
+            **To install:** tap `wheel-strategy-dashboard.apk` below on your Android phone,
+            then allow "Install unknown apps" if prompted.
+          files: wheel-strategy-dashboard.apk
